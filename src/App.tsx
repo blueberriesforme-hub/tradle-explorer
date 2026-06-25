@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Globe from "react-globe.gl";
 import type { TradeData } from "./types";
 import { CountrySidebar } from "./components/CountrySidebar";
-import { ProductSidebar } from "./components/ProductSidebar";
 import { RankingPanel } from "./components/RankingPanel";
 import { ProductBrowser } from "./components/ProductBrowser";
 import { InfoPanel } from "./components/InfoPanel";
@@ -37,7 +36,7 @@ export default function App() {
   const [geoData, setGeoData] = useState<object | null>(null);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
-  const [showRanking, setShowRanking] = useState(false);
+  const [showLabels, setShowLabels] = useState(false);
   const [hoverIso, setHoverIso] = useState<string | null>(null);
   const [hoverName, setHoverName] = useState<string>("");
   const mousePos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -64,7 +63,7 @@ export default function App() {
     return Math.max(...Object.values(exp));
   }, [trade, selectedProduct]);
 
-  // Top-20 exporters for the selected product, with lat/lng for globe labels
+  // Top-20 exporters for the selected product, with lat/lng for globe badges
   const top20Labels = useMemo(() => {
     if (!trade || !selectedProduct) return [];
     return Object.entries(trade.products[selectedProduct]?.exporters ?? {})
@@ -85,6 +84,26 @@ export default function App() {
       .filter((x): x is NonNullable<typeof x> => x !== null);
   }, [trade, selectedProduct]);
 
+  const top20Isos = useMemo(() => new Set(top20Labels.map((d) => d.iso)), [top20Labels]);
+
+  // Country name labels for the globe toggle
+  const countryLabels = useMemo(() => {
+    if (!trade) return [];
+    return Object.entries(CENTROIDS).map(([iso, [lat, lng]]) => ({
+      lat,
+      lng,
+      name: trade.countries[iso]?.name ?? iso.toUpperCase(),
+      iso,
+    }));
+  }, [trade]);
+
+  // Filter out top-20 countries from plain labels to avoid overlap when product selected
+  const visibleLabels = useMemo(() => {
+    if (!showLabels) return [];
+    if (!selectedProduct) return countryLabels;
+    return countryLabels.filter((d) => !top20Isos.has(d.iso));
+  }, [showLabels, countryLabels, selectedProduct, top20Isos]);
+
   const getCountryColor = useCallback(
     (feat: any) => {
       const iso = feat.properties?.ISO_A3?.toLowerCase();
@@ -104,7 +123,6 @@ export default function App() {
       const iso = feat.properties?.ISO_A3?.toLowerCase();
       if (!iso || !trade?.countries[iso]) return;
       setSelectedCountry(iso);
-      setShowRanking(false);
     },
     [trade]
   );
@@ -118,7 +136,6 @@ export default function App() {
     setTooltipPos({ ...mousePos.current });
   }, []);
 
-  // mousemove on the wrapper: update ref silently, update tooltip pos if hovering
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     mousePos.current = { x: e.clientX, y: e.clientY };
     setTooltipPos((prev) => prev ? { x: e.clientX, y: e.clientY } : prev);
@@ -126,7 +143,6 @@ export default function App() {
 
   const flyToCountry = useCallback((iso: string) => {
     setSelectedCountry(iso);
-    setShowRanking(false);
   }, []);
 
   // HTML element factory for top-20 rank badges
@@ -167,7 +183,8 @@ export default function App() {
     );
   }
 
-  const sidebarOpen = !!(selectedCountry || (selectedProduct && !showRanking));
+  const showRanking = !!selectedProduct;
+  const sidebarOpen = !!selectedCountry;
 
   return (
     <div
@@ -193,80 +210,100 @@ export default function App() {
         onPolygonClick={handleCountryClick}
         onPolygonHover={handleCountryHover}
         polygonLabel={() => ""}
-        // Top-20 rank badges
+        // Top-20 rank badges (shown when product selected)
         htmlElementsData={top20Labels}
         htmlElement={buildRankLabel}
         htmlLat={(d: any) => d.lat}
         htmlLng={(d: any) => d.lng}
         htmlAltitude={0.07}
+        // Country name labels (toggled)
+        labelsData={visibleLabels}
+        labelLat={(d: any) => d.lat}
+        labelLng={(d: any) => d.lng}
+        labelText={(d: any) => d.name}
+        labelColor={() => "rgba(255,255,255,0.75)"}
+        labelSize={0.45}
+        labelResolution={2}
+        labelAltitude={0.01}
+        labelDotRadius={0}
       />
 
       {/* Top bar */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-3 z-10">
-        <div className="bg-slate-900/80 backdrop-blur border border-slate-700 rounded-xl px-4 py-2 flex items-center gap-3">
-          <span className="text-white font-semibold text-sm tracking-wide">🌐 Tradle Explorer</span>
-          <div className="w-px h-4 bg-slate-600" />
-          <ProductBrowser
-            trade={trade}
-            selectedProduct={selectedProduct}
-            onSelect={(code) => { setSelectedProduct(code); setSelectedCountry(null); }}
-            onClear={() => setSelectedProduct(null)}
-          />
-          <div className="w-px h-4 bg-slate-600" />
+        <div className="bg-slate-900/80 backdrop-blur border border-slate-700 rounded-xl px-4 py-2.5 flex items-center gap-4">
+          {/* Identity + tagline */}
+          <div className="flex flex-col leading-tight">
+            <span className="text-white font-semibold text-sm tracking-wide">🌐 Tradle Explorer</span>
+            <span className="text-slate-500 text-[10px] mt-0.5">Click a country · Browse by product</span>
+          </div>
+
+          <div className="w-px h-8 bg-slate-600" />
+
+          {/* Country name labels toggle */}
           <button
-            onClick={() => { setShowRanking(!showRanking); setSelectedCountry(null); }}
-            className={`text-sm px-3 py-1.5 rounded-lg transition-colors ${
-              showRanking ? "bg-blue-600 text-white" : "text-slate-300 hover:text-white hover:bg-slate-700"
+            onClick={() => setShowLabels((v) => !v)}
+            title="Toggle country name labels on globe"
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
+              showLabels
+                ? "bg-slate-600 text-white"
+                : "text-slate-400 hover:text-white hover:bg-slate-700"
             }`}
           >
-            {selectedProduct ? "Product Rankings" : "Rankings"}
+            <span className="text-[11px]">🏷</span>
+            Country Names
           </button>
+
+          <div className="w-px h-4 bg-slate-600" />
+
+          {/* Product browser — shows heatmap + auto-opens ranking */}
+          <div className="flex flex-col leading-none">
+            <span className="text-[9px] text-slate-500 uppercase tracking-widest mb-1">Explore by Product</span>
+            <ProductBrowser
+              trade={trade}
+              selectedProduct={selectedProduct}
+              onSelect={(code) => { setSelectedProduct(code); setSelectedCountry(null); }}
+              onClear={() => setSelectedProduct(null)}
+            />
+          </div>
+
           <div className="w-px h-4 bg-slate-600" />
           <InfoPanel />
         </div>
       </div>
 
-      {/* Left sidebar */}
-      {sidebarOpen && (
+      {/* Left sidebar — country detail */}
+      {sidebarOpen && selectedCountry && trade.countries[selectedCountry] && (
         <div className="absolute left-4 top-4 bottom-4 w-96 bg-slate-900/90 backdrop-blur border border-slate-700 rounded-2xl p-5 z-10 overflow-hidden flex flex-col">
-          {selectedCountry && trade.countries[selectedCountry] && (
-            <CountrySidebar
-              iso={selectedCountry}
-              data={trade.countries[selectedCountry]}
-              onClose={() => setSelectedCountry(null)}
-            />
-          )}
-          {selectedProduct && trade.products[selectedProduct] && !selectedCountry && (
-            <ProductSidebar
-              code={selectedProduct}
-              data={trade.products[selectedProduct]}
-              trade={trade}
-              onClose={() => setSelectedProduct(null)}
-            />
-          )}
+          <CountrySidebar
+            iso={selectedCountry}
+            data={trade.countries[selectedCountry]}
+            onClose={() => setSelectedCountry(null)}
+          />
         </div>
       )}
 
-      {/* Right ranking panel */}
+      {/* Right panel — product rankings (auto-shows when product selected) */}
       {showRanking && (
         <div className="absolute right-4 top-4 bottom-4 w-72 bg-slate-900/90 backdrop-blur border border-slate-700 rounded-2xl p-5 z-10 overflow-hidden flex flex-col">
           <RankingPanel
             trade={trade}
             selectedProduct={selectedProduct}
             onSelectCountry={flyToCountry}
-            onClose={() => setShowRanking(false)}
+            onClose={() => setSelectedProduct(null)}
           />
         </div>
       )}
 
-      {/* Legend — only in product heatmap mode */}
+      {/* Legend + top-20 callout — only in product heatmap mode */}
       {selectedProduct && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
           <div className="bg-slate-900/80 backdrop-blur border border-slate-700 rounded-xl px-4 py-2 flex items-center gap-3">
             <span className="text-xs text-slate-400">Less</span>
             <div className="w-32 h-2 rounded-full" style={{ background: "linear-gradient(to right, #1e1e1e, #f59e0b, #ef4444)" }} />
             <span className="text-xs text-slate-400">More</span>
-            <span className="text-xs text-slate-500 ml-2">· Export intensity · 2024</span>
+            <span className="text-xs text-slate-500 mx-1">·</span>
+            <span className="text-xs text-amber-400 font-semibold">① – ⑳ Top 20 exporters labeled on globe</span>
+            <span className="text-xs text-slate-500">· 2024</span>
           </div>
         </div>
       )}
